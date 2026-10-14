@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gym Training Energy</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#14171c;--mut:#6b7280;--acc:#e8590c;--bd:#e5e7eb}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--fg:#eceff4;--mut:#9aa3b2;--acc:#ff8a4c;--bd:#2a2f38}}
+*{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:1000px;margin-inline:auto}
+h1{font-size:20px;margin:0 0 12px}.sub{color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px;margin-bottom:12px;overflow-x:auto}
+.k{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+table{width:100%;border-collapse:collapse;margin-top:8px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--bd)}
+th{color:var(--mut);font-size:12px;font-weight:500}.n{text-align:right;font-variant-numeric:tabular-nums}
+tfoot td{border-top:2px solid var(--bd);font-weight:600}
+input,select{background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:6px}
+.btn{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:7px 16px;font-weight:600;cursor:pointer}
+.btn.stop{background:#c92a2a}.btn:disabled{opacity:.5}details{margin-top:8px}summary{cursor:pointer}
+.err{background:#fee2e2;color:#991b1b;padding:10px;border-radius:8px;margin-bottom:12px;display:none}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+#adminbar{display:none!important}</style></head><body>
+<h1>Training Energy</h1>
+<div class="err" id="err"></div>
+
+<div class="card">
+ <div class="row">
+  <select id="range"><option value="1">Today</option><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="custom">Custom range</option></select>
+  <span id="custom" style="display:none" class="row"><input type="date" id="from"> to <input type="date" id="to"></span>
+  <span class="sub" id="period"></span>
+  <span class="sub" id="updated" style="margin-left:auto"></span>
+ </div>
+ <table id="mt"><thead id="mh"></thead><tbody></tbody><tfoot></tfoot></table>
+</div>
+
+<div class="card" id="chal" style="display:none">
+ <div class="k">Challenge tracker</div>
+ <div id="chctl" class="row" style="margin:8px 0">
+  <input id="chname" placeholder="Challenge name">
+  <label><input type="checkbox" class="chs" value="gymstrength" checked> Strength</label>
+  <label><input type="checkbox" class="chs" value="gymspeed" checked> Speed</label>
+  <label><input type="checkbox" class="chs" value="gymdefense" checked> Defense</label>
+  <label><input type="checkbox" class="chs" value="gymdexterity" checked> Dexterity</label>
+  <button id="chstart" class="btn">Start</button>
+  <button id="chstop" class="btn stop" style="display:none">Stop</button>
+ </div>
+ <div id="adminbar" class="sub row"><span id="viewonly">View only.</span>
+  <input id="adminpw" type="password" placeholder="Admin password" autocomplete="current-password">
+  <button id="adminlogin" class="btn">Unlock</button></div>
+ <div id="chmsg" class="sub"></div>
+ <div id="chlist"></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=ts=>new Date(ts*1000).toLocaleString();
+const num=v=>Math.round(v).toLocaleString();
+const ORDER=['Strength','Speed','Defense','Dexterity'];
+let all=[],since=null;
+
+/* shared table: members x stats + total */
+function tableHTML(stats,members){
+  const tot={};stats.forEach(s=>tot[s]=0);let grand=0;
+  const body=members.map((m,i)=>{
+    grand+=m.total;stats.forEach(s=>tot[s]+=m.by[s]||0);
+    return `<tr><td>${i+1}</td><td>${esc(m.name)}</td>${stats.map(s=>`<td class="n">${num(m.by[s]||0)}</td>`).join('')}<td class="n"><b>${num(m.total)}</b></td></tr>`}).join('');
+  return {head:`<tr><th>#</th><th>Member</th>${stats.map(s=>`<th class="n">${s}</th>`).join('')}<th class="n">Total</th></tr>`,
+    body,foot:`<tr><td></td><td>Total</td>${stats.map(s=>`<td class="n">${num(tot[s])}</td>`).join('')}<td class="n">${num(grand)}</td></tr>`};
+}
+
+function render(){
+  const sel=$('range').value,iso=t=>{const d=new Date(t);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+  $('custom').style.display=sel==='custom'?'flex':'none';
+  let lo='0000-01-01',hi='9999-12-31';
+  if(sel==='custom'){lo=$('from').value||lo;hi=$('to').value||hi}
+  else{lo=iso(Date.now()-(+sel-1)*864e5);hi=iso(Date.now())}
+  const rows=all.filter(r=>r.date>=lo&&r.date<=hi);
+  const mem={},seen=new Set();
+  rows.forEach(r=>{seen.add(r.exercise);const m=mem[r.member]||(mem[r.member]={name:r.member,by:{},total:0});
+    m.by[r.exercise]=(m.by[r.exercise]||0)+r.energy;m.total+=r.energy});
+  const extra=[...seen].filter(s=>!ORDER.includes(s)).sort();
+  const stats=extra.length?[...ORDER.filter(s=>seen.has(s)),...extra]:ORDER;  // torn: always all four
+  const members=Object.values(mem).sort((a,b)=>b.total-a.total);
+  const t=tableHTML(stats.length?stats:ORDER,members);
+  $('mh').innerHTML=t.head;
+  $('mt').querySelector('tbody').innerHTML=members.length?t.body:
+    `<tr><td colspan="${(stats.length||4)+3}" class="sub">No training recorded in this period${since?` (tracking since ${esc(since)})`:''}.</td></tr>`;
+  $('mt').querySelector('tfoot').innerHTML=members.length?t.foot:'';
+  $('period').textContent=lo>'0000'&&hi<'9999'?`${lo} → ${hi}`:'';
+}
+
+async function load(){
+  try{
+    const d=await (await fetch('data.json')).json();
+    all=d.rows;since=d.since||null;
+    $('updated').textContent=d.updated?`Updated ${fmt(d.updated)}`:'';
+    $('chal').style.display=d.source==='torn'?'':'none';
+    const e=$('err');e.style.display=d.error?'block':'none';e.textContent=d.error||'';
+    render();
+  }catch(e){}
+}
+
+/* challenge tracker */
+function chTable(c){
+  const members=c.results.map(r=>({name:r.member,by:r.by_stat,total:r.total}));
+  if(!members.length)return '<div class="sub">No data</div>';
+  const t=tableHTML(c.stats,members);
+  return `<table><thead>${t.head}</thead><tbody>${t.body}</tbody><tfoot>${t.foot}</tfoot></table>`;
+}
+let isAdmin=false;
+async function loadMe(){try{isAdmin=(await (await Promise.resolve({json:async()=>({admin:false})})).json()).admin}catch(e){}}
+async function loadCh(){
+  await loadMe();
+  let d;try{d=await (await fetch('challenges.json')).json()}catch(e){return}
+  if(d.error){$('chmsg').textContent=d.error;return}
+  const run=d.challenges.find(c=>c.running);
+  $('chctl').style.display=isAdmin?'flex':'none';$('adminbar').style.display=isAdmin?'none':'flex';
+  $('chstart').style.display=run?'none':'';$('chstop').style.display=run?'':'none';
+  $('chname').disabled=!!run;document.querySelectorAll('.chs').forEach(x=>x.disabled=!!run);
+  $('chmsg').textContent=run?`Running: "${run.name}" since ${fmt(run.start_ts)}`:'No challenge running.';
+  $('chlist').innerHTML=d.challenges.map((c,i)=>`<details ${c.running||i===0?'open':''}><summary><b>${esc(c.name)}</b> · ${fmt(c.start_ts)} → ${c.running?'now <b style="color:var(--acc)">LIVE</b>':fmt(c.end_ts)}</summary>${chTable(c)}</details>`).join('');
+}
+async function post(path,body){
+  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+  const j=await r.json();if(!r.ok){$('chmsg').textContent=j.error||'Failed';return false}return true;
+}
+$('adminlogin').onclick=async()=>{
+  const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('adminpw').value})});
+  const j=await r.json();$('adminpw').value='';
+  $('viewonly').textContent=r.ok?'View only.':(j.error||'Login failed');if(r.ok)loadCh();
+};
+$('adminpw').onkeydown=e=>{if(e.key==='Enter')$('adminlogin').click()};
+$('chstart').onclick=async()=>{
+  const stats=[...document.querySelectorAll('.chs:checked')].map(x=>x.value);
+  $('chstart').disabled=true;await post('/api/challenge/start',{name:$('chname').value,stats});
+  $('chstart').disabled=false;loadCh();
+};
+$('chstop').onclick=async()=>{
+  if(!confirm('Stop the running challenge and freeze its results?'))return;
+  $('chstop').disabled=true;await post('/api/challenge/stop');$('chstop').disabled=false;loadCh();
+};
+['range','from','to'].forEach(i=>$(i).onchange=render);
+load();setInterval(load,60000);loadCh();setInterval(loadCh,45000);
+</script></body></html>
